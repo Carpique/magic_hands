@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Particles</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <div class="controls">
+      <button
+        id="settings-btn"
+        class="icon-btn"
+        type="button"
+        aria-label="Toggle settings panel"
+        aria-expanded="false"
+        aria-controls="settings-panel"
+      >
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
+
+      <button id="fullscreen-btn" class="icon-btn" type="button" aria-label="Toggle fullscreen">
+        <svg class="icon icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="8 3 3 3 3 8"></polyline>
+          <polyline points="16 3 21 3 21 8"></polyline>
+          <polyline points="3 16 3 21 8 21"></polyline>
+          <polyline points="21 16 21 21 16 21"></polyline>
+        </svg>
+        <svg class="icon icon-compress" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 8 8 8 8 3"></polyline>
+          <polyline points="21 8 16 8 16 3"></polyline>
+          <polyline points="8 21 8 16 3 16"></polyline>
+          <polyline points="16 21 16 16 21 16"></polyline>
+        </svg>
+      </button>
+    </div>
+
+    <div id="settings-panel" class="settings-panel" role="region" aria-label="Bloom settings">
+      <label class="slider-row">
+        <span class="slider-label">Strength</span>
+        <input type="range" id="bloom-strength" min="0" max="3" step="0.01" value="0.8" />
+        <span class="slider-value" id="bloom-strength-value">0.80</span>
+      </label>
+      <label class="slider-row">
+        <span class="slider-label">Radius</span>
+        <input type="range" id="bloom-radius" min="0" max="1" step="0.01" value="0.4" />
+        <span class="slider-value" id="bloom-radius-value">0.40</span>
+      </label>
+      <label class="slider-row">
+        <span class="slider-label">Threshold</span>
+        <input type="range" id="bloom-threshold" min="0" max="1" step="0.01" value="0.1" />
+        <span class="slider-value" id="bloom-threshold-value">0.10</span>
+      </label>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
