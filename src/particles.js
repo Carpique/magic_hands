@@ -5,13 +5,21 @@ const PARTICLE_COUNT = 500;
 // Constant-speed, straight-line-with-gentle-steering motion. No velocity/force
 // accumulation anywhere -- each particle's speed is fixed for its lifetime and
 // only its *direction* changes, so nothing can ever build up and "explode."
-const MIN_SPEED = 0.7; // world units / second
-const MAX_SPEED = 1.5;
+const MIN_SPEED = 1.5; // world units / second
+const MAX_SPEED = 5;
 const TURN_RATE = 0.6; // how fast the travel direction meanders
 
 // Short-range steering-away from crowding -- nudges direction, never speed.
 const REPEL_RADIUS = 0.6;
 const REPEL_INFLUENCE = 1.2;
+
+// Hand-tracking attraction: when landmark targets are present, every particle
+// bends its heading toward the nearest one. Like everything else here this only
+// nudges *direction* -- each particle keeps its fixed speed, so the field
+// rushes toward the hand without ever changing pace. As soon as the targets go
+// away (hand out of frame / tracking off) this term vanishes and particles fall
+// straight back to their default meander.
+const ATTRACT_INFLUENCE = 20;
 
 const DEPTH_RANGE = 2; // particles live within [-DEPTH_RANGE, DEPTH_RANGE] on z
 
@@ -79,6 +87,11 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
   const directions = [];
   const speeds = new Float32Array(count);
   const repelAccum = [];
+
+  // World-space points the particles steer toward -- refilled every frame from
+  // the hand tracker (empty whenever the camera is off or no hand is visible).
+  let attractTargets = [];
+  const toTarget = new THREE.Vector3(); // scratch, reused each particle
 
   for (let i = 0; i < count; i++) {
     const p = new THREE.Vector3(
@@ -160,6 +173,7 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     applyRepulsion();
 
     for (let i = 0; i < count; i++) {
+      const p = positions[i];
       const dir = directions[i];
       dir.add(randomUnitVector().multiplyScalar(TURN_RATE * delta));
 
@@ -168,12 +182,28 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
         dir.addScaledVector(repel, REPEL_INFLUENCE * delta);
       }
 
+      // Steer toward the closest hand landmark, if any are being tracked.
+      if (attractTargets.length > 0) {
+        let nearest = attractTargets[0];
+        let nearestDistSq = p.distanceToSquared(nearest);
+        for (let k = 1; k < attractTargets.length; k++) {
+          const distSq = p.distanceToSquared(attractTargets[k]);
+          if (distSq < nearestDistSq) {
+            nearestDistSq = distSq;
+            nearest = attractTargets[k];
+          }
+        }
+        if (nearestDistSq > 1e-6) {
+          toTarget.subVectors(nearest, p).multiplyScalar(1 / Math.sqrt(nearestDistSq));
+          dir.addScaledVector(toTarget, ATTRACT_INFLUENCE * delta);
+        }
+      }
+
       // Direction is always renormalized to length 1 -- speed is entirely
       // determined by the fixed per-particle `speeds[i]`, so nothing here
       // can ever accumulate into a runaway velocity.
       if (dir.lengthSq() > 1e-8) dir.normalize();
 
-      const p = positions[i];
       p.addScaledVector(dir, speeds[i] * delta);
 
       // Wrap left/right and top/bottom, so the field always fills the screen.
@@ -209,5 +239,17 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     halfHeight = d.halfHeight;
   }
 
-  return { points, update, setDomain };
+  // `landmarks` is a flat list of { x, y } normalized to [0, 1] in image space
+  // (origin top-left), straight from MediaPipe. They're mapped into the particle
+  // field's world box and mirrored horizontally, so the on-screen pull tracks
+  // the hand like a mirror. Pass an empty array to release the particles.
+  function setHandLandmarks(landmarks) {
+    attractTargets = landmarks.map(({ x, y }) => new THREE.Vector3(
+      (0.5 - x) * 2 * halfWidth,
+      (0.5 - y) * 2 * halfHeight,
+      0
+    ));
+  }
+
+  return { points, update, setDomain, setHandLandmarks };
 }

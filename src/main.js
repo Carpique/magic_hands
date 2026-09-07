@@ -3,6 +3,7 @@ import { createFloatingParticles } from './particles.js';
 import { createComposer } from './postprocessing.js';
 import { initFullscreenToggle } from './fullscreen.js';
 import { initSettingsPanel } from './settings.js';
+import { createHandTracker } from './handTracking.js';
 
 const canvas = document.getElementById('scene');
 
@@ -35,10 +36,13 @@ function onResize() {
 }
 window.addEventListener('resize', onResize);
 
+const handTracker = createHandTracker();
+
 const clock = new THREE.Clock();
 
 function animate() {
   const delta = clock.getDelta();
+  particles.setHandLandmarks(handTracker.update());
   particles.update(delta);
   composer.render();
   requestAnimationFrame(animate);
@@ -52,3 +56,33 @@ initSettingsPanel(
   document.getElementById('settings-panel'),
   bloomPass
 );
+
+// Camera hand tracking: toggled on demand so the browser only asks for camera
+// permission when the user actually wants it.
+const handBtn = document.getElementById('hand-btn');
+const cameraPreview = document.getElementById('camera-preview');
+cameraPreview.appendChild(handTracker.video);
+
+handBtn.addEventListener('click', async () => {
+  if (handTracker.running) {
+    handTracker.stop();
+    handBtn.classList.remove('is-active');
+    handBtn.setAttribute('aria-pressed', 'false');
+    cameraPreview.classList.remove('is-visible');
+    return;
+  }
+
+  handBtn.classList.add('is-loading');
+  try {
+    await handTracker.start();
+    handBtn.classList.add('is-active');
+    handBtn.setAttribute('aria-pressed', 'true');
+    cameraPreview.classList.add('is-visible');
+  } catch (err) {
+    console.error('Hand tracking failed to start:', err);
+    handBtn.classList.add('is-error');
+    setTimeout(() => handBtn.classList.remove('is-error'), 2000);
+  } finally {
+    handBtn.classList.remove('is-loading');
+  }
+});

@@ -72,6 +72,47 @@ body {
   display: block;
 }
 
+#hand-btn.is-active {
+  color: #4ade80;
+}
+
+#hand-btn.is-error {
+  color: #f87171;
+}
+
+#hand-btn.is-loading {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.camera-preview {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10;
+  width: 160px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.camera-preview.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.camera-preview video {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Mirror, to match the horizontally-flipped landmark mapping. */
+  transform: scaleX(-1);
+}
+
 #settings-btn .icon {
   transition: transform 0.2s ease;
 }

@@ -53,3 +53,6 @@ Thumbs.db
 *.sln
 *.sw?
 
+# claude
+_debug*
+*.bak
