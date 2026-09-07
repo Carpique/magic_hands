@@ -17,19 +17,25 @@ Then open the local URL Vite prints (usually http://localhost:5173).
 - `src/postprocessing.js` — `EffectComposer` chain: `AfterimagePass` (trails) + `UnrealBloomPass` (glow)
 - `src/fullscreen.js` — wires up the fullscreen toggle button
 - `src/handTracking.js` — MediaPipe Hand Landmarker running on the webcam feed
+- `src/handOverlay.js` — gray 21-point hand skeleton drawn in the particle scene (debug view)
 - `src/style.css` — black full-bleed background, fullscreen button styling
 
 ## Hand tracking
 
-The hand icon (top-right) turns on camera hand tracking. It uses Google
-MediaPipe's [Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
+Camera hand tracking runs from page load, using Google MediaPipe's
+[Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
 task — the WASM runtime and the `hand_landmarker.task` model are pulled from a
 CDN on first use and then cached by the browser, so no binaries live in the repo.
-While it's on, every particle keeps its own speed but continuously bends its
-heading toward the nearest detected landmark (any of the 21 points, on up to two
-hands), so the whole field drifts toward your hand. The MediaPipe bundle is
-lazy-loaded, so it costs nothing until the feature is switched on. Needs a secure
-context (works on `localhost`).
+Every particle keeps its own speed but continuously bends its heading toward the
+nearest detected landmark (any of the 21 points, on up to two hands), so the
+whole field rushes toward your hand. When no hand is visible the particles fall
+straight back to their default meander. Needs a secure context (works on
+`localhost`).
+
+The hand icon (top-right) toggles a debug view: the 21-point landmark skeleton
+drawn as gray lines directly in the particle scene — so you can see exactly how
+MediaPipe's normalized landmarks get scaled and placed — plus a small mirrored
+camera thumbnail in the corner.
 
 ## Notes
 

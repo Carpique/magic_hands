@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const PARTICLE_COUNT = 500;
+const PARTICLE_COUNT = 1000;
 
 // Constant-speed, straight-line-with-gentle-steering motion. No velocity/force
 // accumulation anywhere -- each particle's speed is fixed for its lifetime and
@@ -251,5 +251,11 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     ));
   }
 
-  return { points, update, setDomain, setHandLandmarks };
+  // The current hand landmarks in world space (groups of 21 per hand), i.e. the
+  // exact points the particles steer toward -- handy for drawing an overlay.
+  function getHandTargets() {
+    return attractTargets;
+  }
+
+  return { points, update, setDomain, setHandLandmarks, getHandTargets };
 }

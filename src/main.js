@@ -4,6 +4,7 @@ import { createComposer } from './postprocessing.js';
 import { initFullscreenToggle } from './fullscreen.js';
 import { initSettingsPanel } from './settings.js';
 import { createHandTracker } from './handTracking.js';
+import { createHandOverlay } from './handOverlay.js';
 
 const canvas = document.getElementById('scene');
 
@@ -38,13 +39,23 @@ window.addEventListener('resize', onResize);
 
 const handTracker = createHandTracker();
 
+const handOverlay = createHandOverlay();
+
 const clock = new THREE.Clock();
 
 function animate() {
   const delta = clock.getDelta();
   particles.setHandLandmarks(handTracker.update());
+  handOverlay.update(particles.getHandTargets());
   particles.update(delta);
+
   composer.render();
+  if (handOverlay.visible) {
+    renderer.autoClear = false;
+    renderer.render(handOverlay.scene, camera);
+    renderer.autoClear = true;
+  }
+
   requestAnimationFrame(animate);
 }
 
@@ -57,32 +68,22 @@ initSettingsPanel(
   bloomPass
 );
 
-// Camera hand tracking: toggled on demand so the browser only asks for camera
-// permission when the user actually wants it.
+// The camera + hand tracking run from page load; the particles always react.
+// The hand button only toggles the debug view: the gray landmark skeleton drawn
+// in the scene, plus the mirrored camera thumbnail.
 const handBtn = document.getElementById('hand-btn');
 const cameraPreview = document.getElementById('camera-preview');
 cameraPreview.appendChild(handTracker.video);
 
-handBtn.addEventListener('click', async () => {
-  if (handTracker.running) {
-    handTracker.stop();
-    handBtn.classList.remove('is-active');
-    handBtn.setAttribute('aria-pressed', 'false');
-    cameraPreview.classList.remove('is-visible');
-    return;
-  }
+handTracker.start().catch((err) => {
+  console.error('Hand tracking failed to start:', err);
+  handBtn.classList.add('is-error');
+});
 
-  handBtn.classList.add('is-loading');
-  try {
-    await handTracker.start();
-    handBtn.classList.add('is-active');
-    handBtn.setAttribute('aria-pressed', 'true');
-    cameraPreview.classList.add('is-visible');
-  } catch (err) {
-    console.error('Hand tracking failed to start:', err);
-    handBtn.classList.add('is-error');
-    setTimeout(() => handBtn.classList.remove('is-error'), 2000);
-  } finally {
-    handBtn.classList.remove('is-loading');
-  }
+handBtn.addEventListener('click', () => {
+  const show = !handOverlay.visible;
+  handOverlay.setVisible(show);
+  handBtn.classList.toggle('is-active', show);
+  handBtn.setAttribute('aria-pressed', String(show));
+  cameraPreview.classList.toggle('is-visible', show);
 });
