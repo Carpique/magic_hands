@@ -1,6 +1,6 @@
 // Wires the slim overlay panel's sliders to the bloom pass, and the arrow
 // button that shows/hides it.
-export function initSettingsPanel(button, panel, bloomPass) {
+export function initSettingsPanel(button, panel, bloomPass, onStrengthOverride) {
   const strengthInput = panel.querySelector('#bloom-strength');
   const radiusInput = panel.querySelector('#bloom-radius');
   const thresholdInput = panel.querySelector('#bloom-threshold');
@@ -24,6 +24,8 @@ export function initSettingsPanel(button, panel, bloomPass) {
   strengthInput.addEventListener('input', () => {
     bloomPass.strength = Number(strengthInput.value);
     updateReadouts();
+    // Once the user sets strength by hand, stop auto-scaling it on resize.
+    onStrengthOverride?.();
   });
   radiusInput.addEventListener('input', () => {
     bloomPass.radius = Number(radiusInput.value);

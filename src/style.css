@@ -73,7 +73,8 @@ body {
 }
 
 #hand-btn.is-active,
-#camera-btn.is-active {
+#camera-btn.is-active,
+#fullscreen-btn.is-active {
   color: #4ade80;
 }
 
@@ -126,9 +127,10 @@ body {
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.06em;
-  /* Filled, translucent, softly glowing -- readable without dominating. */
-  color: rgba(255, 255, 255, 0.32);
-  text-shadow: 0 0 40px rgba(255, 255, 255, 0.45);
+  /* Filled, translucent, softly glowing -- readable without dominating. The
+     dark second shadow keeps it legible over bright patches of the field. */
+  color: rgba(255, 255, 255, 0.4);
+  text-shadow: 0 0 40px rgba(255, 255, 255, 0.5), 0 2px 16px rgba(0, 0, 0, 0.45);
   pointer-events: none;
   user-select: none;
 }

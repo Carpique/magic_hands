@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createFloatingParticles } from './particles.js';
-import { createComposer } from './postprocessing.js';
+import { createComposer, bloomStrengthFor } from './postprocessing.js';
 import { initFullscreenToggle } from './fullscreen.js';
 import { initSettingsPanel } from './settings.js';
 import { createHandTracker } from './handTracking.js';
@@ -33,6 +33,9 @@ const handTracker = createHandTracker();
 const handOverlay = createHandOverlay();
 handOverlay.setSize(window.innerWidth, window.innerHeight);
 
+// Bloom strength auto-scales with viewport size until the user sets it by hand.
+let bloomUserSet = false;
+
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -40,6 +43,9 @@ function onResize() {
   composer.setSize(window.innerWidth, window.innerHeight);
   particles.setDomain(camera);
   handOverlay.setSize(window.innerWidth, window.innerHeight);
+  if (!bloomUserSet) {
+    bloomPass.strength = bloomStrengthFor(window.innerWidth, window.innerHeight);
+  }
 }
 window.addEventListener('resize', onResize);
 
@@ -82,7 +88,8 @@ initFullscreenToggle(document.getElementById('fullscreen-btn'));
 initSettingsPanel(
   document.getElementById('settings-btn'),
   document.getElementById('settings-panel'),
-  bloomPass
+  bloomPass,
+  () => { bloomUserSet = true; }
 );
 
 // The camera + hand tracking run from page load; the particles always react.
