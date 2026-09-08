@@ -10,9 +10,9 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
-    "three": "latest"
+    "three": "^0.185.1"
   },
   "devDependencies": {
-    "vite": "latest"
+    "vite": "^8.2.2"
   }
 }
