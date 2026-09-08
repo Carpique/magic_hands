@@ -113,6 +113,30 @@ body {
   transform: scaleX(-1);
 }
 
+.pause-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 20vw;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  /* Thin outlined "wireframe" glyphs, matching the stroked icons. */
+  color: transparent;
+  -webkit-text-stroke: 2px rgba(255, 255, 255, 0.55);
+  text-stroke: 2px rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+  user-select: none;
+}
+
+.pause-overlay[hidden] {
+  display: none;
+}
+
 #settings-btn .icon {
   transition: transform 0.2s ease;
 }

@@ -28,26 +28,42 @@ scene.add(particles.points);
 
 const { composer, bloomPass } = createComposer(renderer, scene, camera);
 
+const handTracker = createHandTracker();
+
+const handOverlay = createHandOverlay();
+handOverlay.setSize(window.innerWidth, window.innerHeight);
+
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
   particles.setDomain(camera);
+  handOverlay.setSize(window.innerWidth, window.innerHeight);
 }
 window.addEventListener('resize', onResize);
 
-const handTracker = createHandTracker();
-
-const handOverlay = createHandOverlay();
+// Space toggles the simulation. Rendering keeps going so the frozen frame (and
+// the "Pause" overlay) stays on screen.
+const pauseOverlay = document.getElementById('pause-overlay');
+let paused = false;
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.repeat) return;
+  e.preventDefault();
+  paused = !paused;
+  pauseOverlay.hidden = !paused;
+});
 
 const clock = new THREE.Clock();
 
 function animate() {
   const delta = clock.getDelta();
-  particles.setHandLandmarks(handTracker.update());
-  handOverlay.update(particles.getHandTargets());
-  particles.update(delta);
+
+  if (!paused) {
+    particles.setHandLandmarks(handTracker.update());
+    handOverlay.update(particles.getHandTargets());
+    particles.update(delta);
+  }
 
   composer.render();
   if (handOverlay.visible) {
@@ -87,3 +103,5 @@ handBtn.addEventListener('click', () => {
   handBtn.setAttribute('aria-pressed', String(show));
   cameraPreview.classList.toggle('is-visible', show);
 });
+
+window.__debug = { particles, handOverlay, setPaused: (v) => { paused = v; pauseOverlay.hidden = !v; } };
