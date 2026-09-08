@@ -49,15 +49,35 @@ function onResize() {
 }
 window.addEventListener('resize', onResize);
 
-// Space toggles the simulation. Rendering keeps going so the frozen frame (and
-// the "Pause" overlay) stays on screen.
+// Space (desktop) or a tap on the scene (mobile) toggles the simulation.
+// Rendering keeps going so the frozen frame (and the "Pause" overlay) stays on
+// screen.
 const pauseOverlay = document.getElementById('pause-overlay');
 let paused = false;
+function togglePause() {
+  paused = !paused;
+  pauseOverlay.hidden = !paused;
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' || e.repeat) return;
   e.preventDefault();
-  paused = !paused;
-  pauseOverlay.hidden = !paused;
+  togglePause();
+});
+
+// Touch: treat a quick, still tap on the canvas as the pause toggle. Taps on the
+// control buttons target those elements, not the canvas, so they're unaffected.
+let tapStart = null;
+canvas.addEventListener('pointerdown', (e) => {
+  tapStart = e.pointerType === 'touch'
+    ? { x: e.clientX, y: e.clientY, t: performance.now() }
+    : null;
+});
+canvas.addEventListener('pointerup', (e) => {
+  if (!tapStart) return;
+  const moved = Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y);
+  if (moved < 12 && performance.now() - tapStart.t < 500) togglePause();
+  tapStart = null;
 });
 
 const timer = new THREE.Timer();
