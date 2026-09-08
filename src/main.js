@@ -54,10 +54,11 @@ window.addEventListener('keydown', (e) => {
   pauseOverlay.hidden = !paused;
 });
 
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
 
 function animate() {
-  const delta = clock.getDelta();
+  timer.update();
+  const delta = timer.getDelta();
 
   if (!paused) {
     particles.setHandLandmarks(handTracker.update());
