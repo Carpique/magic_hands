@@ -86,9 +86,10 @@ initSettingsPanel(
 );
 
 // The camera + hand tracking run from page load; the particles always react.
-// The hand button only toggles the debug view: the gray landmark skeleton drawn
-// in the scene, plus the mirrored camera thumbnail.
+// The hand button toggles the landmark skeleton drawn in the scene; the camera
+// button toggles the mirrored camera thumbnail. They're independent.
 const handBtn = document.getElementById('hand-btn');
+const cameraBtn = document.getElementById('camera-btn');
 const cameraPreview = document.getElementById('camera-preview');
 cameraPreview.appendChild(handTracker.video);
 
@@ -97,12 +98,27 @@ handTracker.start().catch((err) => {
   handBtn.classList.add('is-error');
 });
 
-handBtn.addEventListener('click', () => {
-  const show = !handOverlay.visible;
+// Hand landmark overlay: on by default.
+function setHandOverlay(show) {
   handOverlay.setVisible(show);
   handBtn.classList.toggle('is-active', show);
   handBtn.setAttribute('aria-pressed', String(show));
-  cameraPreview.classList.toggle('is-visible', show);
+}
+setHandOverlay(true);
+
+handBtn.addEventListener('click', () => {
+  setHandOverlay(!handOverlay.visible);
+  handBtn.blur(); // so Space (pause) doesn't re-trigger the focused button
+});
+
+// Camera preview thumbnail: off by default.
+let cameraVisible = false;
+cameraBtn.addEventListener('click', () => {
+  cameraVisible = !cameraVisible;
+  cameraPreview.classList.toggle('is-visible', cameraVisible);
+  cameraBtn.classList.toggle('is-active', cameraVisible);
+  cameraBtn.setAttribute('aria-pressed', String(cameraVisible));
+  cameraBtn.blur();
 });
 
 window.__debug = { particles, handOverlay, setPaused: (v) => { paused = v; pauseOverlay.hidden = !v; } };
