@@ -2,34 +2,44 @@ import * as THREE from 'three';
 
 const PARTICLE_COUNT = 1000;
 
-// Pure gravitational n-body. Every particle is a point mass; every hand landmark
-// is a much heavier point mass fixed wherever the tracker puts it. The only
-// force in the system is Newtonian gravity between all of these points -- no
-// drag, no repulsion, no steering, no special-casing the nearest landmark. The
-// particles just fall through the field and whatever happens, happens.
+// Particles are free-floating points -- they carry a velocity and nothing acts
+// on them at all until a hand appears. There is NO gravity between particles.
 //
-//   a_i = G * Sum_j  m_j * (r_j - r_i) / (|r_j - r_i|^2 + eps^2)^(3/2)
+// While hand landmarks are tracked, each one is a fixed heavy attractor and
+// pulls every particle with softened Newtonian gravity:
 //
-// The eps^2 (Plummer softening) keeps close passes from turning into infinite
-// slingshots. Landmarks are never integrated -- they don't feel gravity back,
-// they're just heavy attractors that move when your hand moves.
+//   a_i = LANDMARK_G * Sum_k  (r_k - r_i) / (|r_k - r_i|^2 + eps^2)^(3/2)
+//
+// (particle mass cancels out of gravitational acceleration, so it plays no role
+// here). The eps^2 (Plummer softening) keeps close passes from slingshotting to
+// infinity. When the hand leaves, the pull just stops -- particles keep whatever
+// velocity they had and drift on.
 
 const MIN_SPEED = 1.5; // initial speed range (world units / second)
 const MAX_SPEED = 5;
 
-// Gravitational constant. Only ever multiplies a mass, so this is also the
-// single "scale the masses" / "scale time" knob: the whole simulation's speed
-// goes as sqrt(G). At the domain size and particle count here, the 1000
-// particles' *own* combined self-gravity is what sets the pace -- too high and
-// the cloud free-falls into a single point in under a second (that's not a bug,
-// just runaway infall); 0.15 gives a slow breathing drift with a hand still
-// able to gather the field over a few seconds.
-const G = 0.15;
-const LANDMARK_MASS_RATIO = 50; // each landmark's mass vs. the mean particle
-const SOFTENING = 1.2; // particle <-> particle, world units
-const LANDMARK_SOFTENING = 1.6; // landmark <-> particle, world units
+// Strength of a single landmark's pull (this is G * landmark_mass rolled into
+// one). ~21 landmarks per hand stack up, so the effective well is far deeper
+// than this suggests. Bigger -> particles gather harder and faster.
+const LANDMARK_G = 50;
+const LANDMARK_SOFTENING = 1.6; // world units -- radius of the softened core
 const MAX_VELOCITY = 45; // world units / s -- numeric safety clamp, not physics
-const WALL_RESTITUTION = 0.9; // energy kept on a wall bounce (1 = perfectly elastic)
+
+// The x/y plane wraps at the screen edges (a torus), so particles glide straight
+// through instead of ping-ponging off walls -- much smoother, and energy is
+// perfectly conserved. Gravity is measured to the nearest wrapped image of each
+// landmark so nothing jumps at the seam. With no wall to absorb energy, this
+// soft cap is the only sink: anything faster than CALM_SPEED eases back toward it
+// (direction untouched) so a hand can't slowly heat the whole field. Free
+// drifters sit well below CALM_SPEED and never feel it.
+const CALM_SPEED = 6; // world units / s
+const CALM_RELAX = 0.6; // 1/s -- rate the excess above CALM_SPEED bleeds off
+
+// Non-physical: the whole velocity bleeds toward zero on this timescale, so an
+// undisturbed field slowly comes to rest over several seconds (~1/SPEED_DECAY).
+// Gravity keeps feeding energy in while a hand is present, so it never fully
+// stops then -- it just settles to a slower drift.
+const SPEED_DECAY = 0.15; // 1/s
 
 const DEPTH_RANGE = 2; // particles live within [-DEPTH_RANGE, DEPTH_RANGE] on z
 
@@ -95,8 +105,7 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
 
   const positions = [];
   const velocities = [];
-  const masses = new Float32Array(count); // proportional to point area (pi r^2)
-  const accel = new Float32Array(count * 3); // gravity accumulator, rebuilt each frame
+  const accel = new Float32Array(count * 3); // landmark-gravity accumulator, rebuilt each frame
 
   // Hand landmarks in world space -- heavy, fixed attractors. Refilled from the
   // tracker every frame, empty whenever no hand is visible.
@@ -124,17 +133,7 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     colorsArr[i3 + 2] = color.b;
 
     sizes[i] = MIN_POINT_SIZE + Math.random() * (MAX_POINT_SIZE - MIN_POINT_SIZE);
-    const radius = sizes[i] * 0.5;
-    masses[i] = Math.PI * radius * radius;
   }
-
-  // Normalize particle masses to a mean of 1, so G and the landmark ratio stay
-  // meaningful regardless of the size range above.
-  let massSum = 0;
-  for (let i = 0; i < count; i++) massSum += masses[i];
-  const meanMass = massSum / count;
-  for (let i = 0; i < count; i++) masses[i] /= meanMass;
-  const landmarkMass = LANDMARK_MASS_RATIO; // = ratio * normalized mean (1)
 
   const geometry = new THREE.BufferGeometry();
   const positionAttribute = new THREE.BufferAttribute(positionsArr, 3);
@@ -156,52 +155,35 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
 
   const points = new THREE.Points(geometry, material);
 
-  const SOFT2 = SOFTENING * SOFTENING;
   const LANDMARK_SOFT2 = LANDMARK_SOFTENING * LANDMARK_SOFTENING;
 
-  // O(n^2) gravity between every pair of particles, plus O(n * landmarks) for
-  // the hand. Fine for ~1000 particles; drop PARTICLE_COUNT if your machine
-  // struggles.
-  function accumulateGravity() {
+  // O(particles * landmarks). Zero when no hand is visible -- particles simply
+  // coast on whatever velocity they already have.
+  function accumulateLandmarkGravity() {
     accel.fill(0);
+    if (attractTargets.length === 0) return;
+
+    const wrapX = 2 * halfWidth;
+    const wrapY = 2 * halfHeight;
 
     for (let i = 0; i < count; i++) {
       const pi = positions[i];
       const pix = pi.x;
       const piy = pi.y;
       const piz = pi.z;
-      const mi = masses[i];
       const i3 = i * 3;
 
-      // particle <-> particle (Newton's third law: update both sides once)
-      for (let j = i + 1; j < count; j++) {
-        const pj = positions[j];
-        const dx = pj.x - pix;
-        const dy = pj.y - piy;
-        const dz = pj.z - piz;
-        const distSq = dx * dx + dy * dy + dz * dz + SOFT2;
-        const inv = 1 / Math.sqrt(distSq);
-        const invCube = (inv * inv * inv) * G; // G / (distSq)^1.5
-        const fj = invCube * masses[j];
-        const fi = invCube * mi;
-        const j3 = j * 3;
-        accel[i3] += dx * fj;
-        accel[i3 + 1] += dy * fj;
-        accel[i3 + 2] += dz * fj;
-        accel[j3] -= dx * fi;
-        accel[j3 + 1] -= dy * fi;
-        accel[j3 + 2] -= dz * fi;
-      }
-
-      // landmarks -> particle (landmarks are fixed, so no reaction on them)
       for (let k = 0; k < attractTargets.length; k++) {
         const t = attractTargets[k];
-        const dx = t.x - pix;
-        const dy = t.y - piy;
+        // nearest wrapped image of the landmark in x/y; z doesn't wrap
+        let dx = t.x - pix;
+        dx -= wrapX * Math.round(dx / wrapX);
+        let dy = t.y - piy;
+        dy -= wrapY * Math.round(dy / wrapY);
         const dz = t.z - piz;
         const distSq = dx * dx + dy * dy + dz * dz + LANDMARK_SOFT2;
         const inv = 1 / Math.sqrt(distSq);
-        const f = (inv * inv * inv) * G * landmarkMass;
+        const f = (inv * inv * inv) * LANDMARK_G; // LANDMARK_G / (distSq)^1.5
         accel[i3] += dx * f;
         accel[i3 + 1] += dy * f;
         accel[i3 + 2] += dz * f;
@@ -213,30 +195,39 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     // Guard the integrator against long frames (tab was backgrounded, etc).
     const dt = Math.min(delta, 0.033);
 
-    accumulateGravity();
+    accumulateLandmarkGravity();
 
     for (let i = 0; i < count; i++) {
       const i3 = i * 3;
       const p = positions[i];
       const v = velocities[i];
 
-      // semi-implicit Euler
+      // semi-implicit Euler (accel is all zeros when no hand is tracked)
       v.x += accel[i3] * dt;
       v.y += accel[i3 + 1] * dt;
       v.z += accel[i3 + 2] * dt;
 
+      // Non-physical global decay: the speed vector slowly bleeds toward zero.
+      v.multiplyScalar(Math.max(0, 1 - SPEED_DECAY * dt));
+
+      // Soft speed cap: bleed off only the excess above CALM_SPEED, keeping the
+      // heading. This is the system's one energy sink now that walls are gone.
+      const sp = v.length();
+      if (sp > CALM_SPEED) {
+        v.multiplyScalar(1 - CALM_RELAX * dt * (1 - CALM_SPEED / sp));
+      }
       if (v.lengthSq() > MAX_VELOCITY * MAX_VELOCITY) v.setLength(MAX_VELOCITY);
 
       p.addScaledVector(v, dt);
 
-      // Bounce off the screen box so the field stays visible. Slightly inelastic
-      // so gravitational infall doesn't heat the system up without bound.
-      if (p.x > halfWidth) { p.x = halfWidth; v.x = -Math.abs(v.x) * WALL_RESTITUTION; }
-      else if (p.x < -halfWidth) { p.x = -halfWidth; v.x = Math.abs(v.x) * WALL_RESTITUTION; }
-      if (p.y > halfHeight) { p.y = halfHeight; v.y = -Math.abs(v.y) * WALL_RESTITUTION; }
-      else if (p.y < -halfHeight) { p.y = -halfHeight; v.y = Math.abs(v.y) * WALL_RESTITUTION; }
-      if (p.z > DEPTH_RANGE) { p.z = DEPTH_RANGE; v.z = -Math.abs(v.z) * WALL_RESTITUTION; }
-      else if (p.z < -DEPTH_RANGE) { p.z = -DEPTH_RANGE; v.z = Math.abs(v.z) * WALL_RESTITUTION; }
+      // x/y wrap around the screen edges; z is a shallow parallax slab, so it
+      // bounces (a z wrap would pop particles in the perspective projection).
+      if (p.x > halfWidth) p.x -= 2 * halfWidth;
+      else if (p.x < -halfWidth) p.x += 2 * halfWidth;
+      if (p.y > halfHeight) p.y -= 2 * halfHeight;
+      else if (p.y < -halfHeight) p.y += 2 * halfHeight;
+      if (p.z > DEPTH_RANGE) { p.z = DEPTH_RANGE; v.z = -Math.abs(v.z); }
+      else if (p.z < -DEPTH_RANGE) { p.z = -DEPTH_RANGE; v.z = Math.abs(v.z); }
 
       positionsArr[i3] = p.x;
       positionsArr[i3 + 1] = p.y;
