@@ -109,6 +109,7 @@ initSettingsPanel(
   document.getElementById('settings-btn'),
   document.getElementById('settings-panel'),
   bloomPass,
+  particles,
   () => { bloomUserSet = true; }
 );
 

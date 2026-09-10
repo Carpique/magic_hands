@@ -69,7 +69,7 @@
       </button>
     </div>
 
-    <div id="settings-panel" class="settings-panel" role="region" aria-label="Bloom settings">
+    <div id="settings-panel" class="settings-panel" role="region" aria-label="Settings">
       <label class="slider-row">
         <span class="slider-label">Strength</span>
         <input type="range" id="bloom-strength" min="0" max="3" step="0.01" value="0.8" />
@@ -84,6 +84,15 @@
         <span class="slider-label">Threshold</span>
         <input type="range" id="bloom-threshold" min="0" max="1" step="0.01" value="0.1" />
         <span class="slider-value" id="bloom-threshold-value">0.10</span>
+      </label>
+      <label class="slider-row">
+        <span class="slider-label">Gravity</span>
+        <input type="range" id="landmark-gravity" min="10" max="200" step="1" value="50" />
+        <span class="slider-value" id="landmark-gravity-value">50</span>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" id="wrap-edges" checked />
+        <span class="checkbox-label">Wrap edges</span>
       </label>
     </div>
 

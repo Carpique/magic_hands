@@ -20,7 +20,8 @@ const MAX_SPEED = 5;
 
 // Strength of a single landmark's pull (this is G * landmark_mass rolled into
 // one). ~21 landmarks per hand stack up, so the effective well is far deeper
-// than this suggests. Bigger -> particles gather harder and faster.
+// than this suggests. Bigger -> particles gather harder and faster. Adjustable
+// at runtime from the settings panel (setLandmarkGravity).
 const LANDMARK_G = 50;
 const LANDMARK_SOFTENING = 1.6; // world units -- radius of the softened core
 const MAX_VELOCITY = 45; // world units / s -- numeric safety clamp, not physics
@@ -111,6 +112,14 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
   // tracker every frame, empty whenever no hand is visible.
   let attractTargets = [];
 
+  let landmarkG = LANDMARK_G;
+
+  // When true the x/y plane wraps at the screen edges (a torus). When false,
+  // particles instead bounce off a hidden bound one screen width outside the
+  // visible area in every direction -- far enough to be off-screen, close enough
+  // that nothing coasts out of the gravity well forever.
+  let wrapEdges = true;
+
   for (let i = 0; i < count; i++) {
     const p = new THREE.Vector3(
       (Math.random() * 2 - 1) * halfWidth,
@@ -175,15 +184,18 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
 
       for (let k = 0; k < attractTargets.length; k++) {
         const t = attractTargets[k];
-        // nearest wrapped image of the landmark in x/y; z doesn't wrap
+        // nearest wrapped image of the landmark in x/y (only when wrapping is
+        // on); z never wraps
         let dx = t.x - pix;
-        dx -= wrapX * Math.round(dx / wrapX);
         let dy = t.y - piy;
-        dy -= wrapY * Math.round(dy / wrapY);
+        if (wrapEdges) {
+          dx -= wrapX * Math.round(dx / wrapX);
+          dy -= wrapY * Math.round(dy / wrapY);
+        }
         const dz = t.z - piz;
         const distSq = dx * dx + dy * dy + dz * dz + LANDMARK_SOFT2;
         const inv = 1 / Math.sqrt(distSq);
-        const f = (inv * inv * inv) * LANDMARK_G; // LANDMARK_G / (distSq)^1.5
+        const f = (inv * inv * inv) * landmarkG; // landmarkG / (distSq)^1.5
         accel[i3] += dx * f;
         accel[i3 + 1] += dy * f;
         accel[i3 + 2] += dz * f;
@@ -220,12 +232,23 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
 
       p.addScaledVector(v, dt);
 
-      // x/y wrap around the screen edges; z is a shallow parallax slab, so it
-      // bounces (a z wrap would pop particles in the perspective projection).
-      if (p.x > halfWidth) p.x -= 2 * halfWidth;
-      else if (p.x < -halfWidth) p.x += 2 * halfWidth;
-      if (p.y > halfHeight) p.y -= 2 * halfHeight;
-      else if (p.y < -halfHeight) p.y += 2 * halfHeight;
+      // x/y either wrap around the screen edges, or bounce off a hidden bound
+      // one screen width outside the visible area. z is a shallow parallax slab,
+      // so it always bounces (a z wrap would pop particles in the perspective
+      // projection).
+      if (wrapEdges) {
+        if (p.x > halfWidth) p.x -= 2 * halfWidth;
+        else if (p.x < -halfWidth) p.x += 2 * halfWidth;
+        if (p.y > halfHeight) p.y -= 2 * halfHeight;
+        else if (p.y < -halfHeight) p.y += 2 * halfHeight;
+      } else {
+        const boundX = 3 * halfWidth; // visible half + one full screen width
+        const boundY = 3 * halfHeight;
+        if (p.x > boundX) { p.x = boundX; v.x = -Math.abs(v.x); }
+        else if (p.x < -boundX) { p.x = -boundX; v.x = Math.abs(v.x); }
+        if (p.y > boundY) { p.y = boundY; v.y = -Math.abs(v.y); }
+        else if (p.y < -boundY) { p.y = -boundY; v.y = Math.abs(v.y); }
+      }
       if (p.z > DEPTH_RANGE) { p.z = DEPTH_RANGE; v.z = -Math.abs(v.z); }
       else if (p.z < -DEPTH_RANGE) { p.z = -DEPTH_RANGE; v.z = Math.abs(v.z); }
 
@@ -263,5 +286,24 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     return attractTargets;
   }
 
-  return { points, update, setDomain, setHandLandmarks, getHandTargets };
+  // Pull strength of a single landmark (settings panel: 10-100).
+  function setLandmarkGravity(value) {
+    landmarkG = value;
+  }
+
+  // true -> x/y plane wraps at the screen edges; false -> particles bounce off a
+  // hidden bound one screen width beyond the visible area.
+  function setWrapEdges(enabled) {
+    wrapEdges = enabled;
+  }
+
+  return {
+    points,
+    update,
+    setDomain,
+    setHandLandmarks,
+    getHandTargets,
+    setLandmarkGravity,
+    setWrapEdges,
+  };
 }
