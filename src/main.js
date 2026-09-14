@@ -25,6 +25,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
 const particles = createFloatingParticles(renderer, camera);
 scene.add(particles.points);
+scene.add(particles.trails);
 
 const { composer, bloomPass } = createComposer(renderer, scene, camera);
 

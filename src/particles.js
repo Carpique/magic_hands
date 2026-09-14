@@ -106,6 +106,13 @@ const FRAGMENT_SHADER = `
   }
 `;
 
+// A trail behind each particle: plain connected line segments through its
+// last TRAIL_LENGTH positions, vertex-colored so they fade to black toward
+// the oldest end. No shaders, no instancing, no blending trickery, and
+// nothing for the bloom pass to catch -- fading to black against the dark
+// background reads as fading out without needing real alpha transparency.
+const TRAIL_LENGTH = 12; // history samples kept per particle, including the current one
+
 export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT) {
   let { halfWidth, halfHeight } = computeScreenDomain(camera);
 
@@ -173,6 +180,74 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
 
   const points = new THREE.Points(geometry, material);
 
+  // Ring buffer of each particle's last TRAIL_LENGTH positions. historyCursor
+  // is the physical slot holding the newest sample; slots rotate forward each
+  // frame. Seeded with the starting position so the trail doesn't streak in
+  // from nowhere on the first frames.
+  const history = new Float32Array(count * TRAIL_LENGTH * 3);
+  for (let i = 0; i < count; i++) {
+    for (let s = 0; s < TRAIL_LENGTH; s++) {
+      const h3 = (i * TRAIL_LENGTH + s) * 3;
+      history[h3] = positionsArr[i * 3];
+      history[h3 + 1] = positionsArr[i * 3 + 1];
+      history[h3 + 2] = positionsArr[i * 3 + 2];
+    }
+  }
+  let historyCursor = 0;
+
+  // The actual line geometry: TRAIL_LENGTH vertices per particle, laid out
+  // oldest-to-newest (rebuilt from the ring buffer each frame -- see
+  // rebuildTrailGeometry), connected by TRAIL_LENGTH - 1 segments.
+  const trailPositions = new Float32Array(count * TRAIL_LENGTH * 3);
+  const trailColors = new Float32Array(count * TRAIL_LENGTH * 3);
+  const trailIndices = new Uint32Array(count * (TRAIL_LENGTH - 1) * 2);
+  for (let i = 0; i < count; i++) {
+    for (let s = 0; s < TRAIL_LENGTH - 1; s++) {
+      const e = (i * (TRAIL_LENGTH - 1) + s) * 2;
+      trailIndices[e] = i * TRAIL_LENGTH + s;
+      trailIndices[e + 1] = i * TRAIL_LENGTH + s + 1;
+    }
+  }
+
+  const trailGeometry = new THREE.BufferGeometry();
+  const trailPositionAttribute = new THREE.BufferAttribute(trailPositions, 3);
+  trailPositionAttribute.setUsage(THREE.DynamicDrawUsage);
+  const trailColorAttribute = new THREE.BufferAttribute(trailColors, 3);
+  trailColorAttribute.setUsage(THREE.DynamicDrawUsage);
+  trailGeometry.setAttribute('position', trailPositionAttribute);
+  trailGeometry.setAttribute('color', trailColorAttribute);
+  trailGeometry.setIndex(new THREE.BufferAttribute(trailIndices, 1));
+
+  const trailMaterial = new THREE.LineBasicMaterial({ vertexColors: true });
+  const trails = new THREE.LineSegments(trailGeometry, trailMaterial);
+  // Positions move every frame without a recomputed bounding volume -- don't
+  // let a stale one cull the trail.
+  trails.frustumCulled = false;
+
+  // Reads the ring buffer in chronological order (oldest -> newest) into the
+  // line geometry's vertex buffers, fading each vertex's color toward black
+  // with age. Called once per update() after physics has moved everything.
+  function rebuildTrailGeometry() {
+    for (let i = 0; i < count; i++) {
+      const ci3 = i * 3;
+      for (let a = 0; a < TRAIL_LENGTH; a++) {
+        const slot = (historyCursor + 1 + a) % TRAIL_LENGTH;
+        const h3 = (i * TRAIL_LENGTH + slot) * 3;
+        const v3 = (i * TRAIL_LENGTH + a) * 3;
+        trailPositions[v3] = history[h3];
+        trailPositions[v3 + 1] = history[h3 + 1];
+        trailPositions[v3 + 2] = history[h3 + 2];
+
+        const fade = a / (TRAIL_LENGTH - 1);
+        trailColors[v3] = colorsArr[ci3] * fade;
+        trailColors[v3 + 1] = colorsArr[ci3 + 1] * fade;
+        trailColors[v3 + 2] = colorsArr[ci3 + 2] * fade;
+      }
+    }
+    trailPositionAttribute.needsUpdate = true;
+    trailColorAttribute.needsUpdate = true;
+  }
+
   const LANDMARK_SOFT2 = LANDMARK_SOFTENING * LANDMARK_SOFTENING;
 
   // O(particles * landmarks). Zero when no hand is visible -- particles simply
@@ -229,6 +304,11 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     // Guard the integrator against long frames (tab was backgrounded, etc).
     const dt = Math.min(delta, 0.033);
 
+    // This frame's position goes into the ring buffer's next slot; prevSlot
+    // (last frame's) is only needed for the wrap-seam fix below.
+    const prevSlot = historyCursor;
+    const writeSlot = (historyCursor + 1) % TRAIL_LENGTH;
+
     accumulateLandmarkGravity();
 
     for (let i = 0; i < count; i++) {
@@ -258,11 +338,17 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
       // one screen width outside the visible area. z is a shallow parallax slab,
       // so it always bounces (a z wrap would pop particles in the perspective
       // projection).
+      const prevH3 = (i * TRAIL_LENGTH + prevSlot) * 3;
       if (wrapEdges) {
-        if (p.x > halfWidth) p.x -= 2 * halfWidth;
-        else if (p.x < -halfWidth) p.x += 2 * halfWidth;
-        if (p.y > halfHeight) p.y -= 2 * halfHeight;
-        else if (p.y < -halfHeight) p.y += 2 * halfHeight;
+        // A wrap teleports the particle, so naively appending this position
+        // to its trail would draw a line clear across the screen. Collapse
+        // just the wrapped axis's previous history sample onto the post-wrap
+        // position instead, so that one joint has zero length there -- one
+        // skipped frame per wrap is invisible.
+        if (p.x > halfWidth) { p.x -= 2 * halfWidth; history[prevH3] = p.x; }
+        else if (p.x < -halfWidth) { p.x += 2 * halfWidth; history[prevH3] = p.x; }
+        if (p.y > halfHeight) { p.y -= 2 * halfHeight; history[prevH3 + 1] = p.y; }
+        else if (p.y < -halfHeight) { p.y += 2 * halfHeight; history[prevH3 + 1] = p.y; }
       } else {
         const boundX = 3 * halfWidth; // visible half + one full screen width
         const boundY = 3 * halfHeight;
@@ -277,9 +363,16 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
       positionsArr[i3] = p.x;
       positionsArr[i3 + 1] = p.y;
       positionsArr[i3 + 2] = p.z;
+
+      const h3 = (i * TRAIL_LENGTH + writeSlot) * 3;
+      history[h3] = p.x;
+      history[h3 + 1] = p.y;
+      history[h3 + 2] = p.z;
     }
 
+    historyCursor = writeSlot;
     positionAttribute.needsUpdate = true;
+    rebuildTrailGeometry();
   }
 
   // Call after the camera's aspect changes (window resize) so the wall
@@ -321,6 +414,7 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
 
   return {
     points,
+    trails,
     update,
     setDomain,
     setHandLandmarks,
