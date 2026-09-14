@@ -106,12 +106,42 @@ const FRAGMENT_SHADER = `
   }
 `;
 
-// A trail behind each particle: plain connected line segments through its
-// last TRAIL_LENGTH positions, vertex-colored so they fade to black toward
-// the oldest end. No shaders, no instancing, no blending trickery, and
-// nothing for the bloom pass to catch -- fading to black against the dark
-// background reads as fading out without needing real alpha transparency.
-const TRAIL_LENGTH = 12; // history samples kept per particle, including the current one
+// A trail behind each particle: connected line segments through its last N
+// positions, fading to black toward the oldest end. The fade is computed per
+// vertex in the shader from a static "slot" attribute and a `cursor` uniform
+// -- nothing about a vertex's own data changes frame to frame, only which
+// slot currently counts as "newest" does. So update() only has to write this
+// frame's new sample (one GPU buffer slice, count * 3 floats) instead of
+// re-deriving and re-uploading every particle's whole trail every frame,
+// which is what made longer trails cost more CPU and bandwidth than they
+// needed to.
+const TRAIL_VERTEX_SHADER = `
+  attribute vec3 color;
+  attribute float slot;
+  uniform float cursor;
+  uniform float len;
+  varying vec3 vColor;
+  void main() {
+    // Age in samples since this slot was written, counting from the slot
+    // right after cursor (oldest retained, about to be overwritten next) to
+    // cursor itself (just written this frame, brightest).
+    float age = mod(slot - cursor - 1.0 + len, len);
+    float fade = len > 1.0 ? age / (len - 1.0) : 1.0;
+    vColor = color * fade;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const TRAIL_FRAGMENT_SHADER = `
+  varying vec3 vColor;
+  void main() {
+    gl_FragColor = vec4(vColor, 1.0);
+  }
+`;
+
+// Adjustable at runtime from the settings panel (setTrailLength); this is
+// just the seed.
+const DEFAULT_TRAIL_LENGTH = 12; // history samples kept per particle, including the current one
 
 export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT) {
   let { halfWidth, halfHeight } = computeScreenDomain(camera);
@@ -180,72 +210,117 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
 
   const points = new THREE.Points(geometry, material);
 
-  // Ring buffer of each particle's last TRAIL_LENGTH positions. historyCursor
-  // is the physical slot holding the newest sample; slots rotate forward each
-  // frame. Seeded with the starting position so the trail doesn't streak in
-  // from nowhere on the first frames.
-  const history = new Float32Array(count * TRAIL_LENGTH * 3);
-  for (let i = 0; i < count; i++) {
-    for (let s = 0; s < TRAIL_LENGTH; s++) {
-      const h3 = (i * TRAIL_LENGTH + s) * 3;
-      history[h3] = positionsArr[i * 3];
-      history[h3 + 1] = positionsArr[i * 3 + 1];
-      history[h3 + 2] = positionsArr[i * 3 + 2];
+  // Builds a fresh ring buffer + line geometry for a given trail length.
+  // Vertices are laid out slot-major -- index(slot, i) = slot * count + i --
+  // so "this frame's new sample, for every particle" is one contiguous run
+  // in the position buffer, letting update() upload it with a single cheap
+  // addUpdateRange instead of re-uploading the whole thing. `color` and
+  // `slot` are per-vertex but never change after this runs, so they're
+  // uploaded once here and never touched again. Length 0 or 1 has no segment
+  // to draw -- trails.visible just goes false. Called once at startup and
+  // again whenever the settings panel changes the length (which resets every
+  // particle's trail rather than trying to resample the old history into the
+  // new length).
+  //
+  // The index buffer connects every physically-adjacent slot pair (s, s+1
+  // mod len) -- a full closed ring per particle, len segments, not len - 1.
+  // Physical-slot adjacency is chronological adjacency for every pair
+  // *except* (cursor, cursor+1): that one would connect this frame's newest
+  // sample straight back to the oldest one, a chord slicing across whatever
+  // shape the trail traces (invisible for a particle moving in a straight
+  // line, very visible as a second stray line for one moving in a curve or
+  // orbit). setSeamPair() collapses exactly that one pair to a zero-length
+  // segment each frame and restores the pair that was collapsed last frame
+  // -- an O(count) fix-up, not the O(count * len) rebuild this design exists
+  // to avoid.
+  function buildTrailState(len) {
+    const history = new Float32Array(count * len * 3);
+    const colorAttr = new Float32Array(count * len * 3);
+    const slotAttr = new Float32Array(count * len);
+    for (let i = 0; i < count; i++) {
+      const ci3 = i * 3;
+      for (let s = 0; s < len; s++) {
+        const v = s * count + i;
+        const v3 = v * 3;
+        history[v3] = positionsArr[ci3];
+        history[v3 + 1] = positionsArr[ci3 + 1];
+        history[v3 + 2] = positionsArr[ci3 + 2];
+        colorAttr[v3] = colorsArr[ci3];
+        colorAttr[v3 + 1] = colorsArr[ci3 + 1];
+        colorAttr[v3 + 2] = colorsArr[ci3 + 2];
+        slotAttr[v] = s;
+      }
     }
-  }
-  let historyCursor = 0;
 
-  // The actual line geometry: TRAIL_LENGTH vertices per particle, laid out
-  // oldest-to-newest (rebuilt from the ring buffer each frame -- see
-  // rebuildTrailGeometry), connected by TRAIL_LENGTH - 1 segments.
-  const trailPositions = new Float32Array(count * TRAIL_LENGTH * 3);
-  const trailColors = new Float32Array(count * TRAIL_LENGTH * 3);
-  const trailIndices = new Uint32Array(count * (TRAIL_LENGTH - 1) * 2);
-  for (let i = 0; i < count; i++) {
-    for (let s = 0; s < TRAIL_LENGTH - 1; s++) {
-      const e = (i * (TRAIL_LENGTH - 1) + s) * 2;
-      trailIndices[e] = i * TRAIL_LENGTH + s;
-      trailIndices[e + 1] = i * TRAIL_LENGTH + s + 1;
+    // trailIndices[s] (per particle) is the pair (slot s, slot (s+1)%len),
+    // stored s-major so "every particle's pair at slot s" is one contiguous
+    // run -- same trick as the position buffer, for the same reason.
+    const trailIndices = new Uint32Array(count * len * 2);
+    const indexAttribute = new THREE.BufferAttribute(trailIndices, 1);
+    indexAttribute.setUsage(THREE.DynamicDrawUsage);
+
+    function setSeamPair(s, collapsed) {
+      const base = s * count * 2;
+      for (let i = 0; i < count; i++) {
+        const e = base + i * 2;
+        trailIndices[e] = s * count + i;
+        trailIndices[e + 1] = collapsed ? (s * count + i) : (((s + 1) % len) * count + i);
+      }
+      indexAttribute.addUpdateRange(base, count * 2);
     }
+
+    if (len >= 2) {
+      for (let s = 0; s < len; s++) setSeamPair(s, false);
+      setSeamPair(0, true); // matches cursor: 0 below -- (0,1) starts collapsed
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    const positionAttribute = new THREE.BufferAttribute(history, 3);
+    positionAttribute.setUsage(THREE.DynamicDrawUsage);
+    geometry.setAttribute('position', positionAttribute);
+    geometry.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
+    geometry.setAttribute('slot', new THREE.BufferAttribute(slotAttr, 1));
+    geometry.setIndex(indexAttribute);
+
+    return {
+      len,
+      history,
+      positionAttribute,
+      indexAttribute,
+      setSeamPair,
+      geometry,
+      cursor: 0, // physical ring-buffer slot holding the newest sample
+    };
   }
 
-  const trailGeometry = new THREE.BufferGeometry();
-  const trailPositionAttribute = new THREE.BufferAttribute(trailPositions, 3);
-  trailPositionAttribute.setUsage(THREE.DynamicDrawUsage);
-  const trailColorAttribute = new THREE.BufferAttribute(trailColors, 3);
-  trailColorAttribute.setUsage(THREE.DynamicDrawUsage);
-  trailGeometry.setAttribute('position', trailPositionAttribute);
-  trailGeometry.setAttribute('color', trailColorAttribute);
-  trailGeometry.setIndex(new THREE.BufferAttribute(trailIndices, 1));
+  let trail = buildTrailState(DEFAULT_TRAIL_LENGTH);
 
-  const trailMaterial = new THREE.LineBasicMaterial({ vertexColors: true });
-  const trails = new THREE.LineSegments(trailGeometry, trailMaterial);
+  const trailMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      cursor: { value: trail.cursor },
+      len: { value: trail.len },
+    },
+    vertexShader: TRAIL_VERTEX_SHADER,
+    fragmentShader: TRAIL_FRAGMENT_SHADER,
+  });
+  const trails = new THREE.LineSegments(trail.geometry, trailMaterial);
   // Positions move every frame without a recomputed bounding volume -- don't
   // let a stale one cull the trail.
   trails.frustumCulled = false;
+  trails.visible = trail.len >= 2;
 
-  // Reads the ring buffer in chronological order (oldest -> newest) into the
-  // line geometry's vertex buffers, fading each vertex's color toward black
-  // with age. Called once per update() after physics has moved everything.
-  function rebuildTrailGeometry() {
-    for (let i = 0; i < count; i++) {
-      const ci3 = i * 3;
-      for (let a = 0; a < TRAIL_LENGTH; a++) {
-        const slot = (historyCursor + 1 + a) % TRAIL_LENGTH;
-        const h3 = (i * TRAIL_LENGTH + slot) * 3;
-        const v3 = (i * TRAIL_LENGTH + a) * 3;
-        trailPositions[v3] = history[h3];
-        trailPositions[v3 + 1] = history[h3 + 1];
-        trailPositions[v3 + 2] = history[h3 + 2];
-
-        const fade = a / (TRAIL_LENGTH - 1);
-        trailColors[v3] = colorsArr[ci3] * fade;
-        trailColors[v3 + 1] = colorsArr[ci3 + 1] * fade;
-        trailColors[v3 + 2] = colorsArr[ci3 + 2] * fade;
-      }
-    }
-    trailPositionAttribute.needsUpdate = true;
-    trailColorAttribute.needsUpdate = true;
+  // Trail length, in history samples (0 disables the trail entirely).
+  // Rebuilding is O(count * len) -- trivial, and this only runs when the
+  // user drags the settings-panel slider.
+  function setTrailLength(len) {
+    len = Math.max(0, Math.round(len));
+    if (len === trail.len) return;
+    trail.geometry.dispose();
+    trail = buildTrailState(len);
+    trails.geometry = trail.geometry;
+    trails.visible = trail.len >= 2;
+    trailMaterial.uniforms.cursor.value = trail.cursor;
+    trailMaterial.uniforms.len.value = trail.len;
   }
 
   const LANDMARK_SOFT2 = LANDMARK_SOFTENING * LANDMARK_SOFTENING;
@@ -305,9 +380,15 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     const dt = Math.min(delta, 0.033);
 
     // This frame's position goes into the ring buffer's next slot; prevSlot
-    // (last frame's) is only needed for the wrap-seam fix below.
-    const prevSlot = historyCursor;
-    const writeSlot = (historyCursor + 1) % TRAIL_LENGTH;
+    // (last frame's) is only needed for the wrap-seam fix below. Trail length
+    // 0 or 1 has no ring buffer to write into. anyWrapped tracks whether the
+    // prevSlot block needs re-uploading too (only when at least one particle
+    // wrapped this frame).
+    const trailLen = trail.len;
+    const hasTrail = trailLen >= 2;
+    const prevSlot = trail.cursor;
+    const writeSlot = hasTrail ? (trail.cursor + 1) % trailLen : 0;
+    let anyWrapped = false;
 
     accumulateLandmarkGravity();
 
@@ -338,17 +419,17 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
       // one screen width outside the visible area. z is a shallow parallax slab,
       // so it always bounces (a z wrap would pop particles in the perspective
       // projection).
-      const prevH3 = (i * TRAIL_LENGTH + prevSlot) * 3;
+      const prevH3 = hasTrail ? (prevSlot * count + i) * 3 : 0;
       if (wrapEdges) {
         // A wrap teleports the particle, so naively appending this position
         // to its trail would draw a line clear across the screen. Collapse
         // just the wrapped axis's previous history sample onto the post-wrap
         // position instead, so that one joint has zero length there -- one
         // skipped frame per wrap is invisible.
-        if (p.x > halfWidth) { p.x -= 2 * halfWidth; history[prevH3] = p.x; }
-        else if (p.x < -halfWidth) { p.x += 2 * halfWidth; history[prevH3] = p.x; }
-        if (p.y > halfHeight) { p.y -= 2 * halfHeight; history[prevH3 + 1] = p.y; }
-        else if (p.y < -halfHeight) { p.y += 2 * halfHeight; history[prevH3 + 1] = p.y; }
+        if (p.x > halfWidth) { p.x -= 2 * halfWidth; if (hasTrail) { trail.history[prevH3] = p.x; anyWrapped = true; } }
+        else if (p.x < -halfWidth) { p.x += 2 * halfWidth; if (hasTrail) { trail.history[prevH3] = p.x; anyWrapped = true; } }
+        if (p.y > halfHeight) { p.y -= 2 * halfHeight; if (hasTrail) { trail.history[prevH3 + 1] = p.y; anyWrapped = true; } }
+        else if (p.y < -halfHeight) { p.y += 2 * halfHeight; if (hasTrail) { trail.history[prevH3 + 1] = p.y; anyWrapped = true; } }
       } else {
         const boundX = 3 * halfWidth; // visible half + one full screen width
         const boundY = 3 * halfHeight;
@@ -364,15 +445,34 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
       positionsArr[i3 + 1] = p.y;
       positionsArr[i3 + 2] = p.z;
 
-      const h3 = (i * TRAIL_LENGTH + writeSlot) * 3;
-      history[h3] = p.x;
-      history[h3 + 1] = p.y;
-      history[h3 + 2] = p.z;
+      if (hasTrail) {
+        const h3 = (writeSlot * count + i) * 3;
+        trail.history[h3] = p.x;
+        trail.history[h3 + 1] = p.y;
+        trail.history[h3 + 2] = p.z;
+      }
     }
 
-    historyCursor = writeSlot;
     positionAttribute.needsUpdate = true;
-    rebuildTrailGeometry();
+    if (hasTrail) {
+      trail.cursor = writeSlot;
+      trailMaterial.uniforms.cursor.value = writeSlot;
+      // Slot-major layout means "every particle's new sample" is one
+      // contiguous run -- upload just that (and, on the rare frame where a
+      // wrap collapsed a joint, the previous slot's run too) instead of the
+      // whole buffer.
+      trail.positionAttribute.addUpdateRange(writeSlot * count * 3, count * 3);
+      if (anyWrapped) trail.positionAttribute.addUpdateRange(prevSlot * count * 3, count * 3);
+      trail.positionAttribute.needsUpdate = true;
+
+      // The ring's closing seam moved forward by one slot: restore the pair
+      // that used to be the seam (prevSlot) to a normal segment, and
+      // collapse the new seam (writeSlot) so newest-to-oldest doesn't draw
+      // as a stray chord across the trail.
+      trail.setSeamPair(prevSlot, false);
+      trail.setSeamPair(writeSlot, true);
+      trail.indexAttribute.needsUpdate = true;
+    }
   }
 
   // Call after the camera's aspect changes (window resize) so the wall
@@ -421,5 +521,6 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
     getHandTargets,
     setLandmarkGravity,
     setWrapEdges,
+    setTrailLength,
   };
 }
