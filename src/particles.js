@@ -26,6 +26,15 @@ const LANDMARK_G = 50;
 const LANDMARK_SOFTENING = 1.6; // world units -- radius of the softened core
 const MAX_VELOCITY = 45; // world units / s -- numeric safety clamp, not physics
 
+// A fast hand makes the attractors teleport frame to frame, and a close/fast
+// encounter with the softened well can inject a big velocity kick in a single
+// frame -- that's the "thrown away" feeling. Particle mass wouldn't fix this
+// even if it were modeled: gravity's acceleration is mass-independent (mass
+// cancels out of a = F/m), so a uniform mass would just be a second G knob.
+// This clamp caps the combined per-particle pull from all landmarks instead,
+// so no single frame can inject more than MAX_ACCEL * dt of velocity.
+const MAX_ACCEL = 60; // world units / s^2 -- hard per-particle clamp
+
 // The x/y plane wraps at the screen edges (a torus), so particles glide straight
 // through instead of ping-ponging off walls -- much smoother, and energy is
 // perfectly conserved. Gravity is measured to the nearest wrapped image of each
@@ -42,7 +51,7 @@ const CALM_RELAX = 0.6; // 1/s -- rate the excess above CALM_SPEED bleeds off
 // stops then -- it just settles to a slower drift.
 const SPEED_DECAY = 0.15; // 1/s
 
-const DEPTH_RANGE = 2; // particles live within [-DEPTH_RANGE, DEPTH_RANGE] on z
+const DEPTH_RANGE = 20; // particles live within [-DEPTH_RANGE, DEPTH_RANGE] on z
 
 const MIN_POINT_SIZE = 4;
 const MAX_POINT_SIZE = 20; // px, hard cap
@@ -199,6 +208,19 @@ export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT
         accel[i3] += dx * f;
         accel[i3 + 1] += dy * f;
         accel[i3 + 2] += dz * f;
+      }
+
+      // Clamp the combined pull from all landmarks so a burst of close/fast
+      // encounters can't inject a single huge velocity kick in one frame.
+      const ax = accel[i3];
+      const ay = accel[i3 + 1];
+      const az = accel[i3 + 2];
+      const aMagSq = ax * ax + ay * ay + az * az;
+      if (aMagSq > MAX_ACCEL * MAX_ACCEL) {
+        const scale = MAX_ACCEL / Math.sqrt(aMagSq);
+        accel[i3] *= scale;
+        accel[i3 + 1] *= scale;
+        accel[i3 + 2] *= scale;
       }
     }
   }
