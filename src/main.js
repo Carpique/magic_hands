@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createFloatingParticles } from './particles.js';
 import { createComposer, bloomStrengthFor } from './postprocessing.js';
 import { initFullscreenToggle } from './fullscreen.js';
-import { initSettingsPanel } from './settings.js';
+import { initSettingsPanel, DEFAULTS } from './settings.js';
 import { createHandTracker } from './handTracking.js';
 import { createHandOverlay } from './handOverlay.js';
 
@@ -45,7 +45,7 @@ function onResize() {
   particles.setDomain(camera);
   handOverlay.setSize(window.innerWidth, window.innerHeight);
   if (!bloomUserSet) {
-    bloomPass.strength = bloomStrengthFor(window.innerWidth, window.innerHeight);
+    bloomPass.strength = bloomStrengthFor(window.innerWidth, window.innerHeight, DEFAULTS.bloomStrength);
   }
 }
 window.addEventListener('resize', onResize);

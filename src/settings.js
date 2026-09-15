@@ -1,3 +1,17 @@
+import { bloomStrengthFor } from './postprocessing.js';
+
+// The one place to change what this app starts up with. Everything else --
+// the settings panel's sliders, the bloom pass, the particle field -- gets
+// its initial value from here instead of from scattered constants or from
+// index.html's markup, so there's a single spot to edit a default.
+export const DEFAULTS = {
+  bloomStrength: 1.5, // pre-viewport-scaling base -- see bloomStrengthFor
+  bloomThreshold: 0,
+  trailLength: 30,
+  gravity: 170,
+  wrapEdges: false,
+};
+
 // Wires the slim overlay panel's controls to the bloom pass and the particle
 // field, and the arrow button that shows/hides it.
 export function initSettingsPanel(button, panel, bloomPass, particles, onStrengthOverride) {
@@ -19,14 +33,26 @@ export function initSettingsPanel(button, panel, bloomPass, particles, onStrengt
     gravityValue.textContent = String(Math.round(Number(gravityInput.value)));
   }
 
-  // Seed the bloom sliders from the pass's actual defaults, so the two stay in
-  // sync. Trail length, gravity, and wrap go the other way -- the markup is
-  // the source of truth, so push their initial values into the particle field.
-  strengthInput.value = bloomPass.strength;
-  thresholdInput.value = bloomPass.threshold;
-  particles.setTrailLength(Number(trailLengthInput.value));
-  particles.setLandmarkGravity(Number(gravityInput.value));
-  particles.setWrapEdges(wrapInput.checked);
+  // Push DEFAULTS into both the inputs (so the panel displays them) and the
+  // pass/particle field (so they actually take effect) -- the markup's own
+  // value/checked attributes are just a no-JS fallback, not the source of
+  // truth.
+  const effectiveStrength = bloomStrengthFor(window.innerWidth, window.innerHeight, DEFAULTS.bloomStrength);
+  bloomPass.strength = effectiveStrength;
+  strengthInput.value = effectiveStrength;
+
+  bloomPass.threshold = DEFAULTS.bloomThreshold;
+  thresholdInput.value = DEFAULTS.bloomThreshold;
+
+  particles.setTrailLength(DEFAULTS.trailLength);
+  trailLengthInput.value = DEFAULTS.trailLength;
+
+  particles.setLandmarkGravity(DEFAULTS.gravity);
+  gravityInput.value = DEFAULTS.gravity;
+
+  particles.setWrapEdges(DEFAULTS.wrapEdges);
+  wrapInput.checked = DEFAULTS.wrapEdges;
+
   updateReadouts();
 
   strengthInput.addEventListener('input', () => {

@@ -20,8 +20,10 @@ const MAX_SPEED = 5;
 
 // Strength of a single landmark's pull (this is G * landmark_mass rolled into
 // one). ~21 landmarks per hand stack up, so the effective well is far deeper
-// than this suggests. Bigger -> particles gather harder and faster. Adjustable
-// at runtime from the settings panel (setLandmarkGravity).
+// than this suggests. Bigger -> particles gather harder and faster. Just a
+// construction-time placeholder -- settings.js's DEFAULTS.gravity overwrites
+// it via setLandmarkGravity before the first frame renders, and that's the
+// one place to change the actual default.
 const LANDMARK_G = 50;
 const LANDMARK_SOFTENING = 1.6; // world units -- radius of the softened core
 const MAX_VELOCITY = 45; // world units / s -- numeric safety clamp, not physics
@@ -139,8 +141,9 @@ const TRAIL_FRAGMENT_SHADER = `
   }
 `;
 
-// Adjustable at runtime from the settings panel (setTrailLength); this is
-// just the seed.
+// Construction-time placeholder -- settings.js's DEFAULTS.trailLength
+// overwrites it via setTrailLength before the first frame renders, and
+// that's the one place to change the actual default.
 const DEFAULT_TRAIL_LENGTH = 30; // history samples kept per particle, including the current one
 
 export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT) {
