@@ -141,7 +141,7 @@ const TRAIL_FRAGMENT_SHADER = `
 
 // Adjustable at runtime from the settings panel (setTrailLength); this is
 // just the seed.
-const DEFAULT_TRAIL_LENGTH = 12; // history samples kept per particle, including the current one
+const DEFAULT_TRAIL_LENGTH = 30; // history samples kept per particle, including the current one
 
 export function createFloatingParticles(renderer, camera, count = PARTICLE_COUNT) {
   let { halfWidth, halfHeight } = computeScreenDomain(camera);
